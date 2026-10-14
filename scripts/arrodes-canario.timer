@@ -1,0 +1,14 @@
+# Rodada diária do canário do yt-dlp. 09:30 UTC = 06:30 em Brasília: ninguém na
+# call (e, se houver, o script adia sozinho). Persistent: VM que estava desligada
+# na hora roda ao subir.
+
+[Unit]
+Description=Canario do yt-dlp do Arrodes - rodada diaria
+
+[Timer]
+OnCalendar=*-*-* 09:30:00 UTC
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

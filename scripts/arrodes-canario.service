@@ -1,0 +1,26 @@
+# Canário do yt-dlp (scripts/canario_ytdlp.sh) — instalada pelo scripts/deploy.sh
+# (troca @USER@, @DIR@ e @SERVICE@).
+# Disparada pelo .timer (todo dia) e pelo .path (quando o bot pede).
+#
+# Sem o endurecimento da unit do bot de propósito: para promover uma versão o
+# canário precisa do `sudo systemctl restart`, e NoNewPrivileges mata o sudo.
+
+[Unit]
+Description=Canario do yt-dlp do Arrodes - testa a producao e so promove o nightly se ela estiver quebrada
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@DIR@
+# sem estas o script cai no padrão ($HOME/arrodes e "arrodes"), e um
+# ARRODES_DIR/ARRODES_SERVICE fora dele quebrava o canário
+Environment=ARRODES_DIR=@DIR@
+Environment=ARRODES_SERVICE=@SERVICE@
+ExecStart=/bin/bash @DIR@/scripts/canario_ytdlp.sh
+# o doctor são ~3 extrações (~15s de CPU): bem atrás do áudio do bot (Nice=-5)
+Nice=10
+CPUWeight=20
+# pior caso: 2 doctors + 60s de espera + pip + doctor + 2 reinícios com sonda
+TimeoutStartSec=20min

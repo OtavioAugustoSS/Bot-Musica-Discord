@@ -1,0 +1,70 @@
+# Unit do Arrodes — instalada pelo scripts/deploy.sh (troca @USER@ e @DIR@).
+#
+# Até 20/09/2026 a unit tinha 6 linhas: Restart=always e mais nada. O que cada
+# bloco abaixo responde está no comentário dele; os números vêm da VM de
+# produção (Oracle E2.1.Micro: ~0,4 núcleo sustentado, 954 MB).
+
+[Unit]
+Description=Arrodes - bot de musica do Discord
+After=network-online.target
+Wants=network-online.target
+# sem teto de tentativas: quem segura o crash-loop é o backoff de restart
+# abaixo. "Desistir" deixaria o bot morto até alguém reparar.
+StartLimitIntervalSec=0
+
+[Service]
+User=@USER@
+WorkingDirectory=@DIR@
+ExecStart=@DIR@/.venv/bin/python src/main.py
+Environment=PYTHONUNBUFFERED=1
+# glibc cria até 8 arenas por núcleo por thread; o bot tem várias (áudio,
+# pulmão, stderr do FFmpeg, pool do yt-dlp). Menos arenas = RSS menor.
+Environment=MALLOC_ARENA_MAX=2
+
+# ── vida ─────────────────────────────────────────────────────────────────────
+# notify + watchdog: o bot manda READY=1 quando o event loop gira e WATCHDOG=1
+# a cada 20s DE DENTRO do loop (services/observabilidade.py). Loop travado por
+# 60s = SIGABRT + restart. É a falha de 19/09 ("Shard has stopped responding"),
+# que Restart=always sozinho nunca enxergou: o processo seguia vivo e mudo.
+Type=notify
+NotifyAccess=main
+WatchdogSec=60
+Restart=always
+# 5s, 10s, 20s ... até 5min: crash-loop a cada 5s estouraria o limite de
+# IDENTIFY do Discord (1000/dia) e o token seria resetado.
+RestartSec=5
+RestartSteps=6
+RestartMaxDelaySec=300
+# o desligamento limpo leva ~1s (journal); 20s de folga antes do SIGKILL
+TimeoutStopSec=20
+TimeoutStartSec=120
+
+# ── recursos: o áudio ganha sempre ───────────────────────────────────────────
+# a extração (deno) já roda com nice +10 (services/youtube.py); com o processo
+# em -5 a thread que manda um pacote a cada 20ms fica 15 níveis à frente dela
+Nice=-5
+CPUWeight=400
+IOSchedulingClass=best-effort
+IOSchedulingPriority=2
+# em 26/08 o processo chegou a 707 MB + 494 MB de swap (Whisper local) e a VM
+# inteira rastejou. High aperta o reclaim; Max mata o cgroup (o systemd sobe
+# de novo) antes de a máquina morrer junto. Hoje: ~115 MB parado, ~180 MB em
+# call, mais deno (~150 MB por alguns segundos) e FFmpeg (~30 MB cada).
+MemoryHigh=550M
+MemoryMax=700M
+MemorySwapMax=256M
+TasksMax=256
+
+# ── endurecimento (só o que não quebra nada) ─────────────────────────────────
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# NÃO usar MemoryDenyWriteExecute: quebra o JIT do deno (desafio JS do YouTube)
+
+[Install]
+WantedBy=multi-user.target

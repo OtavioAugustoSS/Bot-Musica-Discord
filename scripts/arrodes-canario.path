@@ -1,0 +1,13 @@
+# O bot acorda o canário criando este arquivo (services/alerts.Sintomas), quando
+# conta sintomas demais de "o YouTube mudou" em 1h. O script apaga o arquivo logo
+# no começo — senão o PathExists dispararia em laço.
+
+[Unit]
+Description=Canario do yt-dlp do Arrodes - a pedido do bot
+
+[Path]
+PathExists=@DIR@/data/canario-pedido
+Unit=arrodes-canario.service
+
+[Install]
+WantedBy=multi-user.target

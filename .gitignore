@@ -1,0 +1,16 @@
+.env
+.cache
+.venv/
+data/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.claude/
+# journal baixado da VM para o scripts/analise_journal.py
+*.log
+# saída do scripts/calibra_wake.py (--json) e WAVs avulsos: é a voz e a fala
+# de quem estava na call
+*.wav
+!src/assets/escuta.wav
+*.jsonl
