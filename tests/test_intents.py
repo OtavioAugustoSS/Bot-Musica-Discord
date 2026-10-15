@@ -70,7 +70,7 @@ def test_grafias_que_o_whisper_da_ao_nome(frase, esperado):
     "arrotes",
     "vamos jogar rodada",
     "arrodeia ali",
-    "a rode, pula",  # "rode" (0,73) é verbo: o nome dito pela metade não chama
+    "rode o vídeo",  # "rode" sozinho é verbo; "a rode" colado é o nome (15/10)
 ])
 def test_palavra_perto_do_nome_nao_chama_o_bot(frase):
     assert parse_command(frase) is None
@@ -250,8 +250,10 @@ def test_nome_parecido_no_fim_e_parte_do_pedido(frase, esperado):
 def test_inicio_para_log_mostra_so_o_comeco_e_a_grafia_do_nome():
     """O que vai para o journal quando a frase não chamou o bot: a 1ª palavra
     (sem as muletas) e a grafia que mais lembrou o nome — nunca o resto da frase."""
-    assert inicio_para_log("A Rode, bota aquela do Djavan") == "rode→'rode' 0.73"
-    assert inicio_para_log("Ô, a Rodes") == "rodes→'rodes' 0.83"
+    assert inicio_para_log("Jorodes, bota aquela do Djavan") == "jorodes→'jorodes' 0.71"
+    # o "a" solto na frente fica colado: é a grafia que o nome teve
+    assert inicio_para_log("Ô, a Rodes") == "arodes→'arodes' 0.92"
+    assert inicio_para_log("A Rôs me mostra a fila") == "ros→'ros' 0.60"
     assert inicio_para_log("Hero des, pula") == "hero→'herodes' 0.71"
     assert inicio_para_log("Eu fui pra Rodes") == "eu→'prarodes' 0.80"
     # nada parecido com o nome: só a nota, as outras palavras ficam de fora

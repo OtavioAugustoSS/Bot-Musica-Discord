@@ -404,6 +404,7 @@ def _do_run_sem_rajada(self) -> None:
     client = self.client
     play_audio = client.send_audio_packet
     self._speak(_player.SpeakingState.voice)
+    primeiro = True
 
     while not self._end.is_set():
         if not self._resumed.is_set():
@@ -416,6 +417,13 @@ def _do_run_sem_rajada(self) -> None:
         if not data:
             self.stop()
             break
+
+        if primeiro:
+            # o relógio começa no 1º pacote: o 1º read() espera o pulmão encher
+            # (~0,3–0,6s) e, contado como atraso, todo começo de faixa virava
+            # um "realinhado" falso no journal e na linha saúde (15/10: 323ms)
+            primeiro = False
+            self._start = time.perf_counter()
 
         if not client.is_connected():
             connected = client.wait_until_connected(client.timeout)

@@ -105,8 +105,8 @@ def test_veredito_da_passada_com_o_nome():
 
     assert v["comando"] == ["skip", ""]
     assert v["nome_ok"] and v["de_frente"]
-    assert v["primeira"] == "rodes" and v["grafia"] == "rodes"
-    assert v["inicio"] == "rodes→'rodes' 0.83"
+    assert v["primeira"] == "arodes" and v["grafia"] == "arodes"  # o "a" solto, colado
+    assert v["inicio"] == "arodes→'arodes' 0.92"
     assert v["nome_no_audio"] is None and v["mesmo_comando"] is None
 
 

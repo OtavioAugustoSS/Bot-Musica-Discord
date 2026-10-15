@@ -131,6 +131,21 @@ def test_atraso_fica_registrado(relogio):
     assert vezes == 1 and maior == pytest.approx(0.3, abs=0.03)
 
 
+def test_espera_do_pulmao_no_comeco_nao_e_atraso(relogio):
+    """15/10: todo começo de faixa logava "atrasou 323ms" — era o 1º read()
+    esperando o pulmão encher, contado no relógio que já corria."""
+    sem_espera = _Cliente(relogio)
+    patch._do_run_sem_rajada(_Player(_Fonte(30, relogio, trava_no=0, trava_s=0), sem_espera))
+    patch.leu_atrasos_do_audio()
+    cliente = _Cliente(relogio)
+
+    patch._do_run_sem_rajada(_Player(_Fonte(30, relogio, trava_no=1, trava_s=0.35), cliente))
+
+    assert patch.leu_atrasos_do_audio()[0] == 0
+    # o mesmo ritmo de quem começou sem esperar nada
+    assert _intervalos(cliente.enviados) == _intervalos(sem_espera.enviados)
+
+
 def test_apply_troca_o_laco_do_player():
     import discord.player
 

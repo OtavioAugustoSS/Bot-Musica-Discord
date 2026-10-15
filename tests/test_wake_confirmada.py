@@ -19,7 +19,14 @@ import pytest
 
 import config
 from core import listen
-from core.intents import WAKE_WORD, chamou_de_frente, mesmo_comando, nome_no_audio, parse_command
+from core.intents import (
+    WAKE_WORD,
+    chamou_de_frente,
+    mesmo_comando,
+    nome_no_audio,
+    nome_pode_ser_eco,
+    parse_command,
+)
 from services import speech
 
 from test_voice_continuacao import UM_SEGUNDO, _listener, _roda_worker
@@ -69,6 +76,91 @@ def test_grafias_do_nome_continuam_chamando(frase, esperado):
     assert parse_command(frase) == esperado
 
 
+# 15/10, o dono falando "Arrodes" na call ("a-HÓ-djis"): como a Groq escreveu,
+# COM o nome no prompt — nenhuma passava no fuzzy contra "arrodes"
+@pytest.mark.parametrize("frase, esperado", [
+    ("Aroge, pausa.", ("pause", "")),
+    ("Aroze.", ("hello", "")),
+    ("A rôde, pausa.", ("pause", "")),
+    ("Aho, de pausa.", ("pause", "")),
+    ("A rose.", ("hello", "")),
+    ("I rose.", ("hello", "")),
+    ("A Rodis me mostra a fila.", ("queue", "")),
+    ("A Roldes, pula.", ("skip", "")),
+    ("A Rhodes me mostra a fila.", ("queue", "")),
+    # 2º teste (15/10): o nome dito rápido, só "a-HÓ"
+    ("Aho, se repete essa.", ("loop", "")),
+    ("Aho, oce, sai da call.", ("leave", "")),
+    ("A Rose, não repete essa.", ("loop_off", "")),  # ligava o loop
+    ("A Rods embaralha a fila.", ("shuffle", "")),
+    # o nome em inglês na 1ª escuta: só com comando de verdade atrás
+    ("A hold sai da call.", ("leave", "")),
+    ("A hodz, sai da call.", ("leave", "")),
+    ("I rose, pula.", ("skip", "")),
+])
+def test_o_nome_dito_com_sotaque_chama(frase, esperado):
+    assert parse_command(frase) == esperado
+    assert chamou_de_frente(frase)
+
+
+@pytest.mark.parametrize("frase", [
+    "E hoje a gente vai jogar.",   # colado, o "h" de "hoje" soaria o rr do nome
+    "Ah, hoje não.",
+    "Arroz e feijão.",             # "arroz e" colado soa "arroze"
+    "Arrote alto.",
+    "A rosa é bonita.",
+    "A roda caiu.",
+    "A rota tá errada.",
+    "A rodada acabou.",
+    "Eu rodei a cidade.",
+    "I wrote a song.",             # letra em inglês vazando no microfone
+    "Ah, o seu carro.",            # "ah" + "o" colados seriam o "aho"
+    "Ah, o Pedro chegou.",
+    "Ah, de novo não.",
+    "Ah, se eu soubesse.",
+    "I hold you tight.",           # nome em inglês sem comando atrás: letra de música
+    "A holta.",
+    "A hoje eu não vou.",
+])
+def test_som_parecido_com_o_nome_nao_chama(frase):
+    assert parse_command(frase) is None
+    assert not chamou_de_frente(frase)
+
+
+@pytest.mark.parametrize("frase, pode_ser_eco", [
+    ("Arrodes, pula.", True),             # a grafia do prompt: confere
+    ("A Arrodes exclua evidências da fila.", True),
+    ("A Rose, embaralha a fila.", False),  # o prompt não escreve "A Rose"
+    ("Aroge, pausa.", False),
+    ("Herodes, pula.", False),
+    ("Aho, de pausa.", False),
+])
+def test_so_a_grafia_do_prompt_precisa_da_segunda_escuta(frase, pode_ser_eco):
+    assert nome_pode_ser_eco(frase) is pode_ser_eco
+
+
+def test_nome_que_o_prompt_nao_escreve_dispensa_a_segunda_escuta(monkeypatch, caplog):
+    """"A Rose, pula": ~0,4s e uma requisição da cota a menos — e executa."""
+    l, executados, estalos = _roda(monkeypatch, ["A Rose, pula."], [])  # 2ª escuta: StopIteration
+
+    with caplog.at_level(logging.INFO, logger="core.listen"):
+        asyncio.run(_roda_worker(l, [(7, UM_SEGUNDO, time.monotonic())]))
+
+    assert executados == [("skip", "")]
+    assert len(estalos) == 1
+    assert "depois de calar" in caplog.text and "com a 2ª escuta" not in caplog.text
+
+
+def test_comando_conferido_diz_no_log_que_passou_pela_segunda(monkeypatch, caplog):
+    l, executados, _ = _roda(monkeypatch, ["Arrodes, pula."], ["Herodes, pula."])
+
+    with caplog.at_level(logging.INFO, logger="core.listen"):
+        asyncio.run(_roda_worker(l, [(7, UM_SEGUNDO, time.monotonic())]))
+
+    assert executados == [("skip", "")]
+    assert "depois de calar, com a 2ª escuta" in caplog.text
+
+
 # ── a segunda escuta: o nome está no áudio? ──────────────────────────────────
 
 
@@ -83,6 +175,20 @@ def test_grafias_do_nome_continuam_chamando(frase, esperado):
     "Ah, Erodes, desliga o autoplay.",
     "Arro des, próxima.",
     "Arro de, próxima.",
+    # 15/10, sem o nome no prompt: o Whisper ouviu o nome em inglês
+    "A road e baralha a fila.",
+    "A holds, embaralha a fila.",
+    "A Rose me mostra a fila.",
+    "A Rouges me mostra a fila.",
+    "A Routes me mostra a fila.",
+    "A Holtz me mostra a fila.",
+    "I wrote Sposa.",
+    "A hold, pausa.",
+    "I rose, sai da call.",
+    "Arrose.",
+    "A Roots exclua evidências da fila.",
+    "A roads, sai da call.",
+    "A hodz, sai da call.",
 ])
 def test_nome_no_audio_reconhece_o_nome_mal_escrito(segunda):
     assert nome_no_audio(segunda)
@@ -113,6 +219,12 @@ def test_nome_no_audio_reconhece_o_nome_mal_escrito(segunda):
     "Carros de corrida.",
     "O carro desse cara.",
     "Carrões.",
+    # a forma do nome em inglês é a palavra INTEIRA: estas só começam parecido
+    "A rosa é bonita.",
+    "A roupa tá suja.",
+    "Hoje não.",
+    "Arroz.",
+    "Arrote.",
 ])
 def test_nome_no_audio_recusa_o_que_nao_e_o_nome(segunda):
     assert not nome_no_audio(segunda)
@@ -132,6 +244,8 @@ def test_nome_no_audio_recusa_o_que_nao_e_o_nome(segunda):
     # o nome mal ouvido na frente quebrava o parse — barrada à toa
     ("Aroldo, com o próximo.", "skip"),
     ("Rodas, limpa a fila.", "clear_queue"),
+    # o nome partido em duas palavras na frente (15/10)
+    ("A Raúl diz, me mostra a fila.", "queue"),
 ])
 def test_mesmo_comando_nas_duas_escutas_confirma(segunda, acao):
     assert mesmo_comando(segunda, acao)
@@ -165,6 +279,18 @@ def test_barrada_diz_no_log_o_que_a_primeira_leu(monkeypatch, caplog):
     assert executados == []
     assert "que leu skip" in caplog.text
     assert f"'{WAKE_WORD.capitalize()}' só na 1ª escuta" in caplog.text
+    assert "começa com 'abre'" in caplog.text
+
+
+def test_barrada_com_o_a_solto_loga_as_duas_palavras(monkeypatch, caplog):
+    """"A Raul just…": só "a" no log não diz como o nome saiu escrito."""
+    l, executados, _ = _roda(monkeypatch, ["Arrodes, próxima."], ["A Raul, abre a porta."])
+
+    with caplog.at_level(logging.INFO, logger="core.listen"):
+        asyncio.run(_roda_worker(l, [(7, UM_SEGUNDO, time.monotonic())]))
+
+    assert executados == []
+    assert "começa com 'a raul'" in caplog.text
 
 
 def test_segunda_escuta_vai_sem_o_nome_no_prompt(monkeypatch):

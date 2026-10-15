@@ -320,17 +320,38 @@ escrever de um jeito. Para afinar a detecção:
 Não suba o `_WAKE_THRESHOLD` acima de 0,833: "A Rodes" vira "rodes" quando o
 "a" cai, e "rodes" mede exatamente isso.
 
-Em produção, sem gravar ninguém, o journal já mostra quem chamou e não foi
-atendido:
+Além das variantes escritas, o nome é comparado pelo **som** (`_chave` em
+`intents.py`): dito por brasileiro ele soa "a-HÓ-djis", e o Whisper escreve
+"Aroge", "Aroze", "A rôde", "Aho, de" — tudo vira a chave `arodi`. Sem o nome
+no prompt (2ª escuta) ele ouve inglês: "A Rose", "I wrote", "A hold"
+(`_NOME_EM_INGLES`). Grafia que o prompt não escreve não pode ser eco dele, e
+dispensa a 2ª escuta (`nome_pode_ser_eco`).
+
+## Melhoria contínua
+
+O ciclo é: usar → ler o journal → ajustar → testar → deploy. Um comando baixa o
+journal da VM e roda a análise:
 
 ```bash
-ssh arrodes 'journalctl -u arrodes --since "7 days ago" -o short-iso --no-pager' > journal.log
-python scripts/analise_journal.py journal.log
+ARRODES_HOST=arrodes bash scripts/analisa.sh               # desde o último deploy
+ARRODES_HOST=arrodes bash scripts/analisa.sh "7 days ago"  # janela maior
 ```
 
-O bloco "sem wake word" é o histograma das primeiras palavras das falas que
-não chamaram o bot: uma grafia nova do nome que se repete ali é candidata a
-variante.
+O que olhar no relatório:
+
+- **"sem wake word" / "o resto leria"** — falas que eram chamada e o nome saiu
+  escrito de um jeito novo: a grafia que se repete ali vira variante ou caso
+  de teste.
+- **BARRADAS pela 2ª escuta** — o nome foi dito mas a conferência recusou: as
+  duas primeiras palavras dela mostram como o Whisper o ouviu sem o prompt.
+- **ATRASO dos comandos** — da última sílaba ao comando executado, com e sem a
+  2ª escuta.
+- **áudio realinhado / faixas** — soluços no envio do áudio e quedas do CDN.
+
+O journal fica em `logs/` (fora do git) para comparar antes × depois. Rodando
+no PC, o mesmo script lê a saída do bot: `python src/main.py > bot.log 2>&1` e
+`python scripts/analise_journal.py bot.log`. Sem `VOICE_DEBUG`, nenhum log
+guarda o que as pessoas falam — só o começo das frases que não chamaram o bot.
 
 ## Avisos ao dono
 

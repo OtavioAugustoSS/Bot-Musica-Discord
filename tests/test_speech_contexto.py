@@ -107,3 +107,29 @@ def test_contexto_tem_orcamento_por_peso_e_nao_por_caractere():
     assert len(ingles) <= 260
     assert len(japones) <= 80
     assert contexto_de([]) == ""
+
+
+def test_contexto_sem_os_enfeites_do_titulo():
+    """15/10: com a fila cheia de "(Ao Vivo)", o Whisper escrevia "Ao Vivo" no
+    lugar do nome do bot ("Aho Vivo.", "Ao Vivo, Zezé Dizembarada, fila.")."""
+    from unittest.mock import MagicMock
+
+    from core import listen
+    from core.queue import MusicQueue, Track
+
+    player = MagicMock()
+    player.queue = MusicQueue()
+    player.queue.add_many([
+        Track(title="Vidro Fumê - Ao Vivo", artist="Bruno & Marrone"),
+        Track(title="Eu Sei de Cor (Ao Vivo | Acústico)", artist="Marília Mendonça"),
+        Track(title="Última Noite - Solo", artist="Léo Foguete"),
+        Track(title="Evidências", artist="Chitãozinho & Xororó"),
+        Track(title="Bohemian Rhapsody - Remastered 2011", artist="Queen"),
+    ])
+
+    contexto = listen.VoiceListener(player, MagicMock())._contexto_da_fila()
+
+    assert "vivo" not in contexto.lower() and "remaster" not in contexto.lower()
+    assert "Solo" not in contexto and "(" not in contexto
+    for nome in ("Vidro Fumê", "Eu Sei de Cor", "Última Noite", "Evidências", "Bohemian Rhapsody"):
+        assert nome in contexto

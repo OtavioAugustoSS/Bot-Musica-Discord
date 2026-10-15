@@ -30,7 +30,12 @@ if hasattr(sys.stdout, "reconfigure"):
 LINHA = re.compile(
     r"^(\S+) \S+ \S+\[\d+\]: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+ (\w+) ([\w.]+): (.*)$"
 )
+# o bot rodando no PC (python src/main.py > bot.log): sem o prefixo do journald
+# e com o horário local
+LINHA_LOCAL = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+ (\w+) ([\w.]+): (.*)$")
 BRT = timezone(timedelta(hours=-3))
+# "[7] comando de voz skip: 'Arrodes, pula.' — 1.6s depois de calar, com a 2ª escuta"
+LATENCIA = re.compile(r"— ([\d.]+)s depois de calar(, com a 2ª escuta)?$")
 # "[7] sem wake word (começa com rode→'rode' 0.73), o resto leria skip"; sem nada
 # parecido com o nome, "(começa com cara 0.46)"; e o formato antigo, "(começa com 'cara')"
 SEM_WAKE = re.compile(
@@ -58,7 +63,13 @@ def carrega(caminho):
             raw = raw.rstrip("\n")
             m = LINHA.match(raw)
             if not m:
-                evs.append((None, None, "RAW", "", raw))
+                local = LINHA_LOCAL.match(raw)
+                if local:
+                    ts = datetime.strptime(local.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=BRT)
+                    msg = local.group(4).removeprefix("\U0001f399️ ")
+                    evs.append((ts, "pc", local.group(2), local.group(3), msg))
+                else:
+                    evs.append((None, None, "RAW", "", raw))
                 continue
             # o rel\u00f3gio do bot na VM \u00e9 UTC; mostramos em BRT
             ts = datetime.strptime(m.group(2), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).astimezone(BRT)
@@ -271,6 +282,17 @@ def analisa(caminho):
             for linha in contexto(int(m.group(1)), ts, antes=15, depois=0):
                 if "transcrito" not in linha or "0 chars" in linha:
                     print(linha)
+
+    com_2a, sem_2a = [], []
+    for ts, mod, msg in voz:
+        m = LATENCIA.search(msg)
+        if m:
+            (com_2a if m.group(2) else sem_2a).append(float(m.group(1)))
+    print("\n--- ATRASO dos comandos (da última sílaba ao comando executado):")
+    for rotulo, valores in (("com a 2ª escuta", com_2a), ("sem a 2ª escuta", sem_2a)):
+        if valores:
+            print(f"  {rotulo}: n={len(valores)} p50 {pct(valores, .5):.1f}s"
+                  f" p90 {pct(valores, .9):.1f}s max {max(valores):.1f}s")
 
     print("\n--- sem wake word começando por verbo (menos vai/para), com contexto -10s..+10s:")
     for ts, mod, msg in voz:

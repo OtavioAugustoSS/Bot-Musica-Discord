@@ -24,14 +24,35 @@ WAKE_WORD = "arrodes"  # minúsculo: a comparação é depois do _normalize
 _WAKE_VARIANTS = {
     "arrodes", "arodes", "arrodis", "arodis", "harrodes", "harodes", "herodes",
     "harrods", "rhodes", "aroldes", "haroldes", "erodes", "arrods", "arrode",
+    # o nome dito rápido, só o "a-HÓ": 4 de 5 chamadas perdidas no teste de
+    # 15/10 abriam assim ("Aho, se repete essa", "Aho, oce, sai da call")
+    "aho",
+    "arods",  # "A Rods embaralha a fila" (large-v3, 15/10)
 }
+# variações que só valem como palavra INTEIRA: coladas, "Ah, o seu carro" vira "aho"
+_SO_INTEIRA = frozenset({"aho"})
 # palavras pt de verdade acima do _WAKE_THRESHOLD (arrotes, arrozes, arrobes,
 # arrojes e carrões, 0,86; ardes, 0,83; arredondes, 0,82) e, por garantia, o
 # verbo "arrodear" (0,80), a um erro de grafia do limiar
 _WAKE_BLOCKLIST = {
     "arrotes", "arrozes", "arrobes", "arrojes", "carroes", "ardes", "arredondes",
     "arrodeia", "arrodeio", "arrodear", "arrodeou", "arrodeando",
+    "arrote",  # mesmo som do nome na chave fonética (_chave)
 }
+# O nome dito por brasileiro soa "a-HÓ-djis": o "rr" é um H e o "des" do fim é
+# "djis". Na sessão de 15/10 (o dono falando "Arrodes" na call) o Whisper o
+# escreveu "Aroge", "Aroze", "A rôde", "Aho, de", "A rose", "I rose" — e o
+# fuzzy contra "arrodes" não pega nenhuma. A chave desfaz as grafias do mesmo
+# som: todas viram "arodi". Só a chave EXATA vale ("rode", o verbo, é "rodi";
+# "a rede", "aredi"; "arroz de", "arozdi").
+_CHAVE_DO_NOME = "arodi"
+# o "a-" do nome que o Whisper separa como palavra: "A rose", "I rose", "E rodes"
+_ABERTURAS_DO_NOME = frozenset({"a", "ah", "ha", "e", "eh", "i", "eu", "ai"})
+# 2ª escuta (sem o nome no prompt): o Whisper ouve o nome em INGLÊS — "A Rose",
+# "A road", "A hold(s)", "A Holtz", "A Routes", "A Rouges", "I wrote" (15/10,
+# 17 de 20 transcrições). A palavra inteira, colada ao "a-", tem de ter esta
+# forma: "a roda", "a rosa", "a rodas" e "arroz" ficam de fora.
+_NOME_EM_INGLES = re.compile(r"aro(?:l?d|lt|s|t|g)(?:e|es|s|z|tz|i|is)?")
 # "A Rodes" funciona porque o "a" sai como muleta e "rodes" dá 0,833: acima
 # disso ele quebra. Abaixo, passa conversa: a 0,75 já entrariam "arredores"
 # (0,75) e "a rodas" colado (0,77)
@@ -87,6 +108,8 @@ _LOOP_OFF_PHRASES = (
     "tira o loop", "tira loop", "tira do loop", "sem loop", "desliga o loop",
     "para de repetir", "chega de repetir", "para o loop",
     "tira o repeat", "desliga o repeat", "sem repeat", "para o repeat",
+    # 15/10: "Arrodes, não repete essa" ligava o loop
+    "nao repete", "nao repita", "nao precisa repetir", "sem repetir",
 )
 _LOOP_WORDS = ("repete", "repita", "repetir")
 _CLEAR_PHRASES = (
@@ -359,9 +382,17 @@ _LOG_CANDIDATO_MIN = 0.6
 
 
 def _sem_muletas_na_frente(text: str) -> list[str]:
-    """As palavras como o parser as vê: sem o eco do prompt e sem as muletas da frente."""
+    """As palavras como o parser as vê: sem o eco do prompt e sem as muletas da frente.
+
+    O "a-" do nome solto na frente ("A rôde, pausa", "I rose, pula") não é
+    muleta: junto da palavra seguinte, ele É o nome — que segue com a grafia
+    ouvida ("arode"), para o log e a calibragem mostrarem como saiu escrito."""
     words = _sem_eco_do_prompt(_normalize(text).split())
-    while words and words[0] in _FILLERS:
+    while words:
+        if len(words) > 1 and words[0] in _ABERTURAS_DO_NOME and _abertura_e_o_nome(words[1]):
+            return ["a" + words[1]] + words[2:]
+        if words[0] not in _FILLERS:
+            break
         words.pop(0)
     return words
 
@@ -400,10 +431,98 @@ def is_stt_noise(text: str) -> bool:
     return " ".join(_normalize(text).split()) in _STT_NOISE
 
 
+def _som(palavra: str) -> str:
+    """O que depende de onde a letra está NA PALAVRA: o "h" depois de vogal é o
+    rr dito como H ("Aho" = "Arro"); o do começo ("hoje") não."""
+    s = re.sub(r"wr|rh", "r", palavra)
+    return re.sub(r"(?<=[aeiou])h", "r", s)
+
+
+def _chave(*palavras: str) -> str:
+    """O som de uma grafia (ou de um par colado) sem o fim átono: "arrodes" → "arodi".
+
+    O resto vale na junção das palavras: "Aho, se" é "a-HÓ-zi" como "Aroze"."""
+    s = re.sub(r"r+", "r", "".join(_som(p) for p in palavras))
+    s = re.sub(r"o[uaw]", "o", s)  # "road", "Rouges"
+    s = re.sub(r"(?<=[aeiou])s(?=[aeiou])", "z", s)  # s entre vogais soa z: "rose"
+    # o "dji" do fim: aroGE, aroZE. O "te" ("I wrote") fica de fora: letra de
+    # música em inglês vazando no microfone chamaria o bot
+    s = re.sub(r"dj|dz|[gjz](?=[ei])", "d", s)
+    s = re.sub(r"e(?=s?$)", "i", s)
+    return re.sub(r"[sz]$", "", s)
+
+
+def _par_soa_como_o_nome(a: str, b: str) -> bool:
+    """O nome partido em duas palavras pelo som ("Aho, de" = "arode"). A 2ª
+    tem de ter duas letras: "arroz e" colado também soa "arroze"."""
+    return len(b) >= 2 and a + b not in _WAKE_BLOCKLIST and _chave(a, b) == _CHAVE_DO_NOME
+
+
+def _abertura_e_o_nome(palavra: str) -> bool:
+    """O "a-" solto na frente + esta palavra formam o nome? ("A rôde", "I rose")"""
+    colada = "a" + palavra
+    if palavra in _WAKE_BLOCKLIST or colada in _WAKE_BLOCKLIST:
+        return False
+    # o som de cada palavra separado: colado, o "h" de "E hoje" viraria o rr
+    return _variante_colada(colada) or _chave("a", palavra) == _CHAVE_DO_NOME
+
+
+def _variante_colada(colada: str) -> bool:
+    """Duas palavras coladas formam uma das variações? ("Arro des" sim; "Ah, o" não)"""
+    return colada in _WAKE_VARIANTS and colada not in _SO_INTEIRA
+
+
+def _som_em_ingles(palavra: str) -> str:
+    s = re.sub(r"wr|rh", "r", palavra)
+    s = re.sub(r"^ho(?=l?d|lt)", "ro", s)  # "hold", "Holtz", "hodz" — "hoje" não
+    s = re.sub(r"r+", "r", s)
+    return re.sub(r"o[uaow]", "o", s)  # "road", "Routes", "Roots"
+
+
+def _abre_com_o_nome_em_ingles(words: list[str]) -> bool:
+    """A frase abre com o nome do jeito que o Whisper o ouve em inglês ("A Rose",
+    "I wrote", "A holds", "Arrose") — sempre na 2ª escuta, às vezes na 1ª."""
+    return _nome_em_ingles(words) > 0
+
+
+def _nome_em_ingles(words: list[str]) -> int:
+    """Quantas palavras o nome em inglês ocupa no começo de `words` (0 = não abre)."""
+    if len(words) > 1 and words[0] in _ABERTURAS_DO_NOME:
+        palavra, som, n = words[1], "a" + _som_em_ingles(words[1]), 2
+    elif words and words[0].startswith("a"):
+        palavra, som, n = words[0], _som_em_ingles(words[0]), 1
+    else:
+        return 0
+    if palavra in _WAKE_BLOCKLIST or "a" + palavra in _WAKE_BLOCKLIST:
+        return 0
+    return n if _NOME_EM_INGLES.fullmatch(som) is not None else 0
+
+
+def _nome_fraco(text: str) -> tuple[str, str] | None:
+    """1ª escuta com o nome em inglês ("A hold, sai da call", 15/10): é evidência
+    fraca — letra de música também abre com "I hold" — então só vale com um
+    comando DE VERDADE atrás. Nome sozinho ou frase para o LLM, não."""
+    words = _sem_eco_do_prompt(_normalize(text).split())
+    n = _nome_em_ingles(words)
+    if not n:
+        return None
+    lido = parse_command(" ".join([WAKE_WORD, *words[n:]]))
+    return lido if lido is not None and lido[0] not in _SEM_CONFIRMACAO_PELO_COMANDO | {"hello"} else None
+
+
+def abertura_para_log(text: str) -> str:
+    """O começo da 2ª escuta barrada, para o journal: a 1ª palavra — e a 2ª, se a
+    1ª for o "a-" solto do nome ("a rose", "i wrote"). Nunca a frase."""
+    words = _normalize(text).split()
+    if len(words) > 1 and words[0] in _ABERTURAS_DO_NOME:
+        return f"{words[0]} {words[1]}"
+    return words[0] if words else ""
+
+
 def _is_wake_word(word: str) -> bool:
     if word in _WAKE_BLOCKLIST:
         return False
-    if word in _WAKE_VARIANTS:
+    if word in _WAKE_VARIANTS or _chave(word) == _CHAVE_DO_NOME:
         return True
     return difflib.SequenceMatcher(None, word, WAKE_WORD).ratio() >= _WAKE_THRESHOLD
 
@@ -411,8 +530,8 @@ def _is_wake_word(word: str) -> bool:
 def _lembra_o_nome(word: str, *, colada: bool = False) -> bool:
     if word in _WAKE_BLOCKLIST:
         return False
-    if word in _WAKE_VARIANTS:  # o que chama na 1ª escuta confirma na 2ª
-        return True
+    if _variante_colada(word) if colada else (word in _WAKE_VARIANTS or _chave(word) == _CHAVE_DO_NOME):
+        return True  # o que chama na 1ª escuta confirma na 2ª
     # pedaço só numa palavra inteira: colada com a vizinha, "quero descansar"
     # e "pro desafio" também têm "rodes"
     if not colada and any(pedaco in word for pedaco in _NOME_NO_AUDIO_PEDACOS):
@@ -428,12 +547,14 @@ def nome_no_audio(text: str) -> bool:
     vazando no microfone de alguém, "Arrodes, I'm going to ask you".
     """
     words = _normalize(text).split()[:_NOME_NO_AUDIO_PALAVRAS]
+    if _abre_com_o_nome_em_ingles(words):
+        return True
     for i, word in enumerate(words):
         if _lembra_o_nome(word):
             return True
         if i + 1 < len(words):
             par = word + words[i + 1]
-            if par in _WAKE_VARIANTS or (
+            if _variante_colada(par) or _par_soa_como_o_nome(word, words[i + 1]) or (
                 _par_do_tamanho_do_nome(word, words[i + 1]) and _lembra_o_nome(par, colada=True)
             ):
                 return True
@@ -464,11 +585,17 @@ def mesmo_comando(segunda: str, acao: str) -> bool:
     if lido is not None and lido[0] == acao:
         return True
     # "Aroldo, com o próximo": o nome mal ouvido na frente quebrava o parse e a
-    # chamada de verdade era barrada. Sem a 1ª palavra, o resto é o comando.
-    palavras = segunda.split(maxsplit=1)
+    # chamada de verdade era barrada. Sem a 1ª palavra, o resto é o comando —
+    # sem as duas, se o nome saiu partido ("A Raúl diz, me mostra a fila").
+    palavras = segunda.split(maxsplit=2)
     if len(palavras) < 2:
         return False
-    lido = parse_command(f"{WAKE_WORD}, {palavras[1]}")
+    lido = parse_command(f"{WAKE_WORD}, {' '.join(palavras[1:])}")
+    if lido is not None and lido[0] == acao:
+        return True
+    if len(palavras) < 3 or _normalize(palavras[0]) not in _ABERTURAS_DO_NOME:
+        return False
+    lido = parse_command(f"{WAKE_WORD}, {palavras[2]}")
     return lido is not None and lido[0] == acao
 
 
@@ -506,7 +633,7 @@ def _is_wake_pair(a: str, b: str) -> bool:
     combined = a + b
     if combined in _WAKE_BLOCKLIST:
         return False
-    if combined in _WAKE_VARIANTS:
+    if _variante_colada(combined) or _par_soa_como_o_nome(a, b):
         return True
     if not _par_do_tamanho_do_nome(a, b):
         return False
@@ -523,18 +650,48 @@ def chamou_de_frente(text: str) -> bool:
     words = _sem_muletas_na_frente(text)
     if not words:
         return False
-    return _is_wake_word(words[0]) or (len(words) > 1 and _is_wake_pair(words[0], words[1]))
+    return (
+        _is_wake_word(words[0])
+        or (len(words) > 1 and _is_wake_pair(words[0], words[1]))
+        or _nome_fraco(text) is not None
+    )
 
 
 def _find_wake(words: list[str]) -> list[str] | None:
     """Resto da frase após a wake word (procurada no começo), ou None."""
-    limit = min(_WAKE_SCAN_WORDS, len(words))
-    for i in range(limit):
-        if _is_wake_word(words[i]):
-            return words[i + 1 :]
+    achado = _onde_esta_o_nome(words)
+    if achado is None:
+        return None
+    i, n = achado
+    return words[i + n :]
+
+
+def _onde_esta_o_nome(words: list[str]) -> tuple[int, int] | None:
+    """(posição, quantas palavras) do nome nas primeiras palavras, ou None.
+
+    O par antes da palavra sozinha: em "Aho, de pausa" o nome é "Aho de" — com
+    "aho" sozinho o comando viraria "de pausa"."""
+    for i in range(min(_WAKE_SCAN_WORDS, len(words))):
         if i + 1 < len(words) and _is_wake_pair(words[i], words[i + 1]):
-            return words[i + 2 :]
+            return i, 2
+        if _is_wake_word(words[i]):
+            return i, 1
     return None
+
+
+def nome_pode_ser_eco(text: str) -> bool:
+    """O nome desta transcrição pode ter vindo do PROMPT e não do áudio?
+
+    O prompt da 1ª escuta escreve "Arrodes": é essa grafia que o Whisper copia
+    sobre ruído e conversa. "A Rose", "Aroge", "A Rhodes" o prompt não escreve
+    — vieram do som. Para elas a 2ª escuta (~0,4s e uma requisição a mais da
+    cota) não tem o que conferir."""
+    words = _sem_muletas_na_frente(text)
+    achado = _onde_esta_o_nome(words)
+    if achado is None:
+        return True  # na dúvida, confere
+    i, n = achado
+    return "".join(words[i : i + n]) == WAKE_WORD
 
 
 def _le_numero(words: list[str], i: int) -> tuple[int, int] | None:
@@ -1137,7 +1294,7 @@ def parse_command(text: str) -> tuple[str, str] | None:
 
     rest = _find_wake(words)
     if rest is None:
-        return None
+        return _nome_fraco(text)
 
     # o modelo às vezes ecoa a wake word ("Arrodes, Arrodes, Arrodes, pula")
     while rest and _is_wake_word(rest[0]):

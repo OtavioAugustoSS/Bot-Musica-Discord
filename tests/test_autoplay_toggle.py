@@ -5,7 +5,7 @@ Três lugares (botão do painel, /autoplay, comando de voz) faziam
 rádio numa fila separada isso virou dois bugs visíveis:
 
   - DESLIGAR deixava as faixas de rádio já enfileiradas — elas tocavam
-    mesmo com o autoplay "parado e triste";
+    mesmo com o autoplay desligado;
   - LIGAR no meio de uma música não enchia a rádio: o prefetch só roda no
     início de cada faixa, então a primeira transição pagava busca + ~8s de
     extração em silêncio.

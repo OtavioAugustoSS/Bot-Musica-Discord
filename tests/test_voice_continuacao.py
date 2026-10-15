@@ -229,7 +229,7 @@ def test_sem_wake_word_loga_so_o_comeco(monkeypatch, caplog):
     """Privacidade: nunca o conteúdo — só o começo e a grafia que a pessoa
     tentou usar como wake word, para ajustar as variações."""
     async def transcreve(pcm):
-        return "A Rode, bota aquela do Djavan"
+        return "Jorodes, bota aquela do Djavan"
 
     monkeypatch.setattr(listen.speech, "transcribe", transcreve)
     monkeypatch.setattr(listen, "analyze_speech", lambda pcm, thr: (10, pcm))
@@ -239,8 +239,8 @@ def test_sem_wake_word_loga_so_o_comeco(monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="core.listen"):
         asyncio.run(_roda_worker(l, [(7, UM_SEGUNDO, time.monotonic())]))
 
-    assert l._execute.await_count == 0  # "rode" (0,73) não é o nome
-    assert "sem wake word (começa com rode→'rode' 0.73)" in caplog.text
+    assert l._execute.await_count == 0  # "jorodes" (0,71) não é o nome
+    assert "sem wake word (começa com jorodes→'jorodes' 0.71)" in caplog.text
     for palavra in ("bota", "aquela", "djavan"):
         assert palavra not in caplog.text.lower()
 

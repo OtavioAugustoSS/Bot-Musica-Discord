@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 import wave
@@ -26,14 +27,15 @@ import messages as m
 from core import audio
 from core.intents import (
     WAKE_WORD,
+    abertura_para_log,
     acha_na_fila,
     agora_e_do_nome,
     chamou_de_frente,
-    first_word,
     inicio_para_log,
     is_stt_noise,
     mesmo_comando,
     nome_no_audio,
+    nome_pode_ser_eco,
     parse_command,
     parse_volume,
     sem_o_agora,
@@ -66,6 +68,15 @@ _CONTINUACAO_S = 6.0
 # orçamento dos títulos da fila no prompt do Whisper (ver _contexto_da_fila): o
 # prompt fixo tem ~300 caracteres e, com mais ~240 de títulos, passou na Groq
 _PESO_DO_CONTEXTO = 240
+# o que o título tem e ninguém fala ao pedir: "(Ao Vivo)", "- Ao Vivo", "[Remastered]".
+# No prompt, o Whisper punha "Ao Vivo" no lugar do nome do bot (15/10: "Aho Vivo.",
+# "Ao Vivo, Zezé Dizembarada, fila." — eram chamadas, com a fila cheia de "Ao Vivo")
+_ENFEITE_DO_TITULO = re.compile(
+    r"\s*[\(\[][^\)\]]*[\)\]]"
+    r"|\s+-\s+(?:ao vivo|live|ac[uú]stic[oa]|acoustic|remaster(?:ed)?|vers[aã]o|version|solo"
+    r"|edit|radio edit|deluxe|bonus)\b.*$",
+    re.IGNORECASE,
+)
 # descarte de trecho curto (respiro, clique) não vai para o journal; a
 # partir daqui era fala de verdade e a pessoa merece saber por que sumiu
 _LOG_DISCARD_MIN_S = 1.0
@@ -265,7 +276,7 @@ _CORTE_POR_ENERGIA_MIN_S = 2.5
 
 # contadores para a linha `saúde:` (services/observabilidade): zeram na leitura.
 # É como se mede no journal se os cortes de 04/10 estão salvando trechos.
-_estatisticas = {"cortes_por_energia": 0, "cortes_na_pausa": 0}
+_estatisticas = {"cortes_por_energia": 0, "cortes_na_pausa": 0, "segunda_dispensada": 0}
 
 
 def leu_estatisticas() -> dict[str, int]:
@@ -559,8 +570,11 @@ class VoiceListener:
             # quem acabou de chamar o bot sem dizer o comando: este trecho é o comando
             texto = self._continuacao.completa(user_id, text, time.monotonic()) if text else text
             command = parse_command(texto) if texto else None
-            if command is not None and texto == text and not await self._nome_confirmado(user_id, pcm, command[0]):
+            conferida = command is not None and texto == text and nome_pode_ser_eco(texto)
+            if conferida and not await self._nome_confirmado(user_id, pcm, command[0]):
                 continue  # nem estalo, nem resposta, nem janela de continuação
+            if command is not None and texto == text and not conferida:
+                _estatisticas["segunda_dispensada"] += 1
             # a pessoa chamou o bot NESTE trecho (não só completou a chamada
             # anterior, que já tocou o som): estalo antes de qualquer resposta
             chamou = command is not None if texto == text else parse_command(text) is not None
@@ -603,11 +617,15 @@ class VoiceListener:
                 # canal de texto. Sem ela no journal, os 23% de "unknown"
                 # (27 de 119 comandos em cinco dias) eram impossíveis de
                 # estudar: não dava para saber o que a pessoa tinha pedido.
+                # o atraso que a pessoa sente: da última sílaba ao comando (a
+                # pausa que fecha a frase + as transcrições + o parse)
                 log.info(
-                    "🎙️ [%s] comando de voz %s%s: %r",
+                    "🎙️ [%s] comando de voz %s%s: %r — %.1fs depois de calar%s",
                     user_id, command[0],
                     f" ({command[1]!r})" if command[1] else "",
                     (texto or "")[:160],
+                    time.monotonic() - born + config.VOICE_GAP_S,
+                    ", com a 2ª escuta" if conferida else "",
                 )
                 try:
                     # `texto` e não `text`: quem completou um "Arrodes?" anterior chamou sim
@@ -631,7 +649,7 @@ class VoiceListener:
         log.info(
             "🎙️ [%s] '%s' só na 1ª escuta (que leu %s) — a 2ª escuta (sem o"
             " nome no prompt) começa com %r, 2ª leu %s: ignorado",
-            user_id, WAKE_WORD.capitalize(), acao, first_word(segunda), lido[0] if lido else "-",
+            user_id, WAKE_WORD.capitalize(), acao, abertura_para_log(segunda), lido[0] if lido else "-",
         )
         return False
 
@@ -651,8 +669,9 @@ class VoiceListener:
             nomes: list[str] = []
             for faixa in faixas:
                 for nome in (faixa.title, faixa.artist):
-                    if isinstance(nome, str) and nome and nome not in nomes:
-                        nomes.append(nome)
+                    limpo = _ENFEITE_DO_TITULO.sub("", nome).strip() if isinstance(nome, str) else ""
+                    if limpo and limpo not in nomes:
+                        nomes.append(limpo)
         except Exception:  # noqa: BLE001 — contexto é cortesia, a escuta segue
             return ""
         texto, peso = "", 0

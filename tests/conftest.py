@@ -3,7 +3,13 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import dotenv
 import pytest
+
+# os testes não leem o .env de quem roda: o VOICE_DEBUG=1 de uma sessão de
+# calibragem ou o VOICE_WHISPER_LOCAL=0 mudavam o que eles conferem (e o
+# deploy.sh, que roda a suíte no PC, parava). Antes de qualquer import do config.
+dotenv.load_dotenv = lambda *args, **kwargs: False
 
 
 @pytest.fixture(autouse=True)
